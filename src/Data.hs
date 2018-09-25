@@ -11,7 +11,8 @@ import Database.Bolt
 import Data.Text as T (Text, pack)
 import Data.Default
 import Data.Maybe(fromJust)
-import Data.Map as M (fromList, Map, empty, union)
+import Data.Map as M (fromList, Map, empty, union, notMember, (!))
+import Control.Monad((>=>))
 
 data Molecule = Molecule { id :: Int
                          , smilesM :: Text
@@ -53,12 +54,11 @@ toReaction v = do node <- exact v
                   name <- (props `at` "name")  >>= exact
                   return $ Reaction identity name
 
-queryReaction :: Int -> BoltActionT IO Reaction
-queryReaction ident = do result <- head <$> queryP cypher params
-                         node <- result `at` "reaction"
-                         toReaction node
-  where cypher = "MATCH (reaction:Reaction) WHERE ID(reaction) = {ident} RETURN reaction"
-        params = fromList [("ident", I ident)]
+queryReaction :: Text -> Map Text Value -> BoltActionT IO Reaction
+queryReaction cypher params = do result <- head <$> queryP cypher params
+                                 node <- result `at` "reaction"
+                                 toReaction node
+
 
 queryAddReaction :: FullReaction -> BoltActionT IO ()
 queryAddReaction fr = queryP_ cypher params
@@ -81,22 +81,33 @@ queryAddReaction fr = queryP_ cypher params
                           , ("iupacO", T $ iupacName $ out fr)]
 
 getReaction :: Int -> IO Reaction
-getReaction ident = runQuery $ queryReaction ident
+getReaction ident = runQuery $ queryReaction cypher params
+   where cypher = "MATCH (reaction:Reaction) WHERE ID(reaction) = {ident} RETURN reaction"
+         params = fromList [("ident", I ident)]
 
 addReaction :: FullReaction -> IO ()
 addReaction reaction = runQuery $ queryAddReaction reaction
 
-shortestPath :: Int -> Int -> IO [Int]
+shortestPath :: Int -> Int -> IO [Reaction]
 shortestPath from to = shortestPathBFS to [from] [] M.empty
 
 shortestPathBFS :: Int -> [Int] -> [Int] -> Map Int Int -> IO [Reaction]
-shortestPathBFS to (to:q)
 shortestPathBFS to [] _ prev = return []
-shortestPathBFS to (q:queue) visited prev = do neighbours <- filter (`notElem` visited) <$> getProduced q
-                                               let neighboursMap = fromList $ zip neighbours [q..]
-                                               let newPrev = union neighboursMap prev
-                                               shortestPathBFS to (queue ++ neighbours) (visited ++ neighbours) newPrev
+shortestPathBFS to (q:queue) visited prev | to == q = convertToReactions q prev
+                                          | otherwise = do neighbours <- filter (`notElem` visited) <$> getProduced q
+                                                           let neighboursMap = fromList $ zip neighbours [q..]
+                                                           let newPrev = union neighboursMap prev
+                                                           shortestPathBFS to (queue ++ neighbours) (visited ++ neighbours) newPrev
 
+convertToReactions :: Int -> Map Int Int -> IO [Reaction]
+convertToReactions v prev | notMember v prev = return []
+                          | otherwise = pure (:) <*> getReactionBetween u v <*> convertToReactions u prev
+                              where u = prev ! v
+
+getReactionBetween :: Int -> Int -> IO Reaction
+getReactionBetween from to = runQuery $ queryReaction cypher params
+  where cypher = "MATCH (m1:Molecule)-[:REAGENT_IN]->(r:Reaction)-[:PRODUCT_FROM]->(m2:Molecule) WHERE ID(m1) = {idFrom} AND ID(m2) = {idTo} RETURN reaction"
+        params = fromList [("idFrom", I from), ("idTo", I to)]
 
 
 getProduced :: Int -> IO [Int]
@@ -104,7 +115,7 @@ getProduced m = runQuery $ queryProduced m
 
 queryProduced :: Int -> BoltActionT IO [Int]
 queryProduced m = do result <- queryP cypher params
-                     nodes <- traverse (`at` "prod") result
+                     nodes <- traverse ((`at` "prod") >=> exact) result
                      return $ map nodeIdentity nodes
  where cypher = T.pack $ "MATCH (m:Molecule)-[:REAGENT_IN]->(:Reaction)-[:PRODUCT_FROM]->(prod:Molecule)"
                       ++ "WHERE ID(m) = ident RETURN prod"

@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 814c5d574de2af50577de2c7efa66754c92cbb192e11736a0ebeccdb753b1f22
+-- hash: 7cf37792a6724a8ba262842b02045e088c2f3444620de510d885499d190a76b0
 
 name:           biocad-test
 version:        0.1.0.0
@@ -27,7 +27,7 @@ source-repository head
 library
   exposed-modules:
       Data
-      Lib
+      Database
   other-modules:
       Paths_biocad_test
   hs-source-dirs:
